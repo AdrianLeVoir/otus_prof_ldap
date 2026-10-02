@@ -1,0 +1,122 @@
+---
+# ДЗ: LDAP/FreeIPA — конфигурация IPA-клиента
+# Запуск: ansible-playbook -i ansible/hosts ansible/provision.yml
+# Требует: ipa.otus.lan в /etc/hosts или DNS, запущенный FreeIPA-сервер
+
+- name: Base set up on clients
+  hosts: clients
+  become: true
+  tasks:
+    - name: ensure /etc/hosts entries (нет интегрированного DNS)
+      lineinfile:
+        path: /etc/hosts
+        line: "{{ item }}"
+        state: present
+      loop:
+        - "192.168.1.170 ipa.otus.lan ipa"
+        - "192.168.1.171 client1.otus.lan client1"
+
+    - name: install base tools
+      apt:
+        name: [vim, traceroute, tcpdump, net-tools]
+        state: present
+        update_cache: true
+
+    # (*) Задание со звёздочкой 4: firewall включён
+    - name: install and enable firewall
+      apt:
+        name: ufw
+        state: present
+
+    - name: allow ssh
+      community.general.ufw:
+        rule: allow
+        port: "22"
+        proto: tcp
+
+    # Порты FreeIPA: kerberos 88/464 tcp+udp, kpasswd 464, http 80, https 443,
+    # ldap 389, ldaps 636, dns 53 (если используется), ntp 123
+    - name: allow FreeIPA ports
+      community.general.ufw:
+        rule: allow
+        port: "{{ item.port }}"
+        proto: "{{ item.proto }}"
+        comment: "FreeIPA {{ item.name }}"
+      loop:
+        - { port: "88",  proto: tcp, name: kerberos }
+        - { port: "88",  proto: udp, name: kerberos }
+        - { port: "464", proto: tcp, name: kadmin }
+        - { port: "464", proto: udp, name: kpasswd }
+        - { port: "80",  proto: tcp, name: http }
+        - { port: "443", proto: tcp, name: https }
+        - { port: "389", proto: tcp, name: ldap }
+        - { port: "636", proto: tcp, name: ldaps }
+        - { port: "123", proto: udp, name: ntp }
+
+    - name: enable ufw
+      community.general.ufw:
+        state: enabled
+        default: deny
+        direction: incoming
+
+    - name: install freeipa-client
+      apt:
+        name: freeipa-client
+        state: present
+
+    - name: check if already joined
+      stat:
+        path: /etc/krb5.keytab
+      register: keytab
+
+    - name: join FreeIPA domain
+      shell: >
+        ipa-client-install --mkhomedir
+        --domain={{ ipa_domain }}
+        --server={{ ipa_server }}
+        --no-ntp
+        --principal=admin
+        --password={{ ipa_admin_password }}
+        --unattended
+      when: not keytab.stat.exists
+      register: join_out
+
+    - debug:
+        msg: "{{ join_out.stdout_lines | default(['already joined']) }}"
+
+    - name: verify kerberos ticket is obtainable
+      shell: echo "{{ ipa_admin_password }}" | kinit admin && klist | head -3
+      register: klist_out
+      changed_when: false
+      failed_when: "'krbtgt' not in klist_out.stdout"
+
+    - debug:
+        var: klist_out.stdout_lines
+
+# ---------- (*) SSH-ключи через FreeIPA ----------
+# Ключ хранится в IPA; клиент получает его через sss_ssh_authorizedkeys,
+# authorized_keys на хосте трогать не нужно.
+
+- name: create IPA user with SSH key
+  hosts: ipa
+  become: true
+  vars_files:
+    - defaults/main.yml
+  tasks:
+    - name: kinit admin
+      shell: echo "{{ ipa_admin_password }}" | kinit admin
+      changed_when: true
+
+    - name: ensure test user exists
+      shell: >
+        ipa user-show otususer >/dev/null 2>&1 ||
+        ipa user-add otususer --first=Otus --last=User --password={{ ipa_user_password }}
+      register: user_out
+      changed_when: "'Added user' in user_out.stdout or user_out.rc == 0"
+
+    - name: attach SSH public key to user
+      shell: |
+        KEY=$(cat /root/otususer.pub)
+        ipa user-mod otususer --sshpubkey="$KEY"
+      when: ssh_pubkey_file.stat.exists | default(false)
+      ignore_errors: true

@@ -1,0 +1,14 @@
+[ipa]
+ipa.otus.lan ansible_host=192.168.1.170
+
+[clients]
+client1.otus.lan ansible_host=192.168.1.171
+
+[all:vars]
+ansible_user=adrianl
+ansible_ssh_common_args=-o StrictHostKeyChecking=no
+# Пароль admin FreeIPA
+ipa_admin_password=Otus2022
+ipa_domain=otus.lan
+ipa_realm=OTUS.LAN
+ipa_server=ipa.otus.lan

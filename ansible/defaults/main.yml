@@ -1,0 +1,6 @@
+# Переменные для provision.yml (дублируются из hosts для vars_files)
+ipa_admin_password: Otus2022
+ipa_user_password: Otus2022
+ipa_domain: otus.lan
+ipa_realm: OTUS.LAN
+ipa_server: ipa.otus.lan
